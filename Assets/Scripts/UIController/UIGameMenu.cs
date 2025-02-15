@@ -4,169 +4,311 @@ using Fusion;
 using TMPro;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UI;
+using System;
+using System.Text;
+using UnityEngine.SocialPlatforms.Impl;
 
 namespace Starter
 {
-	/// <summary>
-	/// Shows in-game menu, handles player connecting/disconnecting to the network game and cursor locking.
-	/// </summary>
-	public class UIGameMenu : MonoBehaviour
-	{
-		[Header("Start Game Setup")]
-		[Tooltip("Specifies which game mode player should join - e.g. Platformer, ThirdPersonCharacter")]
-		public string GameModeIdentifier;
-		public NetworkRunner RunnerPrefab;
-		public int MaxPlayerCount = 8;
+    /// <summary>
+    /// Hiển thị menu trong trò chơi, xử lý việc kết nối/ngắt kết nối người chơi với trò chơi mạng và khóa con trỏ.
+    /// </summary>
+    public class UIGameMenu : MonoBehaviour
+    {
+        [Header("Cài đặt bắt đầu trò chơi")]
+        [Tooltip("Xác định chế độ trò chơi mà người chơi sẽ tham gia - ví dụ: Platformer, ThirdPersonCharacter")]
+        public string GameModeIdentifier;
+        public NetworkRunner RunnerPrefab;
+        private int[] MaxCountSelection = {2, 4, 6, 8};
+        private int MaxPlayerCount = 8;
 
-		[Header("Debug")]
-		[Tooltip("For debug purposes it is possible to force single-player game (starts faster)")]
-		public bool ForceSinglePlayer;
+        [Header("Debug")]
+        [Tooltip("Cho mục đích gỡ lỗi, có thể ép buộc trò chơi đơn (bắt đầu nhanh hơn)")]
+        public bool ForceSinglePlayer;
 
-		[Header("UI Setup")]
-		public GameObject BackGround;
-		public CanvasGroup PanelGroup;
-		public TMP_InputField RoomText;
-		public TMP_InputField NicknameText;
-		public TextMeshProUGUI StatusText;
-		public GameObject StartGroup;
-		public GameObject DisconnectGroup;
+        [Header("Cài đặt UI")]
+        [SerializeField] private GameObject[] FuctionPanels;
+        [SerializeField] private Image[] FuctionPanelChangeButtons;
 
-		private NetworkRunner _runnerInstance;
-		private static string _shutdownStatus;
+        public CanvasGroup PanelGroup;
 
-		public async void StartGame()
-		{
-			await Disconnect();
+        public TMP_InputField RoomText;
+        public TMP_InputField NicknameText;
+        public TMP_InputField MaxScoreText;
+        public TextMeshProUGUI StatusText;
+        public TextMeshProUGUI MaxPlayerCountText;
+        private bool _isPrivate;
+        public GameObject[] StartGroup;
+        public GameObject[] DisconnectGroup;
 
-			PlayerPrefs.SetString("PlayerName", NicknameText.text);
+        [Header("Cài đặt")]
+        [SerializeField] private Slider _volumeSoundSlider;
+        [SerializeField] private Slider _volumeMusicSlider;
 
-			_runnerInstance = Instantiate(RunnerPrefab);
+        private NetworkRunner _runnerInstance;
+        private static string _shutdownStatus;
+        [SerializeField] private GameObject _jetFake;
 
-			// Add listener for shutdowns so we can handle unexpected shutdowns
-			var events = _runnerInstance.GetComponent<NetworkEvents>();
-			events.OnShutdown.AddListener(OnShutdown);
+        private static readonly System.Random _random = new System.Random();
+        private bool ScoreAvailable = true;
 
-			var sceneInfo = new NetworkSceneInfo();
-			sceneInfo.AddSceneRef(SceneRef.FromIndex(SceneManager.GetActiveScene().buildIndex));
 
-			var startArguments = new StartGameArgs()
-			{
-				GameMode = Application.isEditor && ForceSinglePlayer ? GameMode.Single : GameMode.Shared,
-				SessionName = RoomText.text,
-				PlayerCount = MaxPlayerCount,
-				// We need to specify a session property for matchmaking to decide where the player wants to join.
-				// Otherwise players from Platformer scene could connect to ThirdPersonCharacter game etc.
-				SessionProperties = new Dictionary<string, SessionProperty> {["GameMode"] = GameModeIdentifier},
-				Scene = sceneInfo,
-			};
+		//khởi tạo phòng
+        public async void StartGame(string roomName)
+        {
+            await Disconnect();
 
-			StatusText.text = startArguments.GameMode == GameMode.Single ? "Starting single-player..." : "Connecting...";
+            _runnerInstance = Instantiate(RunnerPrefab);
 
-			var startTask = _runnerInstance.StartGame(startArguments);
-			await startTask;
+            // Thêm listener cho việc tắt máy để xử lý các trường hợp tắt máy không mong muốn
+            var events = _runnerInstance.GetComponent<NetworkEvents>();
+            events.OnShutdown.AddListener(OnShutdown);
 
-			if (startTask.Result.Ok)
-			{
-				StatusText.text = "";
-				PanelGroup.gameObject.SetActive(false);
-				BackGround.SetActive(false);
-				
-			}
-			else
-			{
-				StatusText.text = $"Connection Failed: {startTask.Result.ShutdownReason}";
-			}
-		}
+            var sceneInfo = new NetworkSceneInfo();
+            sceneInfo.AddSceneRef(SceneRef.FromIndex(SceneManager.GetActiveScene().buildIndex));
 
-		public async void DisconnectClicked()
-		{
-			await Disconnect();
-		}
+            var startArguments = new StartGameArgs()
+            {
+                GameMode = Application.isEditor && ForceSinglePlayer ? GameMode.Single : GameMode.Shared,
+                SessionName = roomName,
+                PlayerCount = MaxPlayerCount,
+                // Cần xác định thuộc tính phiên cho việc ghép trận để quyết định nơi người chơi muốn tham gia.
+                // Nếu không, người chơi từ cảnh Platformer có thể kết nối với trò chơi ThirdPersonCharacter, v.v.
+                SessionProperties = new Dictionary<string, SessionProperty> {["GameMode"] = GameModeIdentifier},
+                Scene = sceneInfo,
+            };
 
-		public async void BackToMenu()
-		{
-			await Disconnect();
+            StatusText.text = startArguments.GameMode == GameMode.Single ? "Starting single-player..." : "Connecting...";
 
-			SceneManager.LoadScene(0);
-		}
+            var startTask = _runnerInstance.StartGame(startArguments);
+            await startTask;
 
-		public void TogglePanelVisibility()
-		{
-			if (PanelGroup.gameObject.activeSelf && _runnerInstance == null)
-				return; // Panel cannot be hidden if the game is not running
+            if (startTask.Result.Ok)
+            {
+                StatusText.text = "";
+                RoomText.text = roomName;
+                SwitchPanel(2);
+                FuctionPanelChangeButtons[1].gameObject.SetActive(false);
+                _jetFake.SetActive(false);
+                PanelGroup.gameObject.SetActive(false);
+            }
+            else
+            {
+                StatusText.text = $"Connection Failed: {startTask.Result.ShutdownReason}";
+            }
+        }
 
-			PanelGroup.gameObject.SetActive(!PanelGroup.gameObject.activeSelf);
+		//nút tham gia phòng
+        public void JoinGame()
+        {
+            StartGame(RoomText.text.ToUpper());
+        }
 
-			if(!PanelGroup.gameObject.activeSelf){
-				Cursor.lockState = CursorLockMode.Locked;
-				Cursor.visible = false;
-			}
-		}
 
-		private void OnEnable()
-		{
-			var nickname = PlayerPrefs.GetString("PlayerName");
-			if (string.IsNullOrEmpty(nickname))
-			{
-				nickname = "Player" + Random.Range(10000, 100000);
-			}
+		//nút tạo phòng
+        public void CreateGame()
+        {
+            if (ScoreAvailable == false) return;
+            StartGame(GenerateRoomName());
+            _runnerInstance.SessionInfo.IsVisible = !_isPrivate;
 
-			NicknameText.text = nickname;
+            GameManager.ScoreToWin = int.Parse(MaxScoreText.text);
+        }
+		
+		//cài đặt phòng riêng tư
+        public void SetPrivate(bool isPrivate)
+        {
+            _isPrivate = isPrivate;
+        }
 
-			// Try to load previous shutdown status
-			StatusText.text = _shutdownStatus != null ? _shutdownStatus : string.Empty;
-			_shutdownStatus = null;
-		}
 
-		private void Update()
-		{
-			// Enter/Esc key is used for locking/unlocking cursor in game view.
-			if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.Escape))
-			{
-				TogglePanelVisibility();
-			}
+		//tạo tên phòng ngẫu nhiên
+        private static string GenerateRoomName()
+        {
+            const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            StringBuilder result = new StringBuilder(6);
+            for (int i = 0; i < 6; i++)
+            {
+                result.Append(chars[_random.Next(chars.Length)]);
+            }
+            return result.ToString();
+        }
 
-			if (PanelGroup.gameObject.activeSelf)
-			{
-				StartGroup.SetActive(_runnerInstance == null);
-				DisconnectGroup.SetActive(_runnerInstance != null);
-				RoomText.interactable = _runnerInstance == null;
-				NicknameText.interactable = _runnerInstance == null;
+		//cài đặt số lượng người chơi tối đa
+        public void SetMaxPlayerCount(bool isNext)
+        {
+            int index = Array.IndexOf(MaxCountSelection, MaxPlayerCount);
+            index += isNext ? 1 : -1;
+            if (index < 0)
+            {
+                index = MaxCountSelection.Length - 1;
+            }
+            else if (index >= MaxCountSelection.Length)
+            {
+                index = 0;
+            }
+            MaxPlayerCount = MaxCountSelection[index];
+            MaxPlayerCountText.text = MaxPlayerCount.ToString();
+        }
 
-				Cursor.lockState = CursorLockMode.None;
-				Cursor.visible = true;
-			}
-		}
+		//kiểm tra nhập vào hợp lệlệ
+        public void CheckMaxScore()
+        {
+            string score = MaxScoreText.text;
+            if (string.IsNullOrEmpty(score))
+            {
+                StatusText.text = "Score cannot be empty!";
+                ScoreAvailable = false;
+                return;
+            }
 
-		public async Task Disconnect()
-		{
-			if (_runnerInstance == null)
-				return;
+            if (!int.TryParse(score, out int a) || a <= 0)
+            {
+                StatusText.text = "Score must be greater than 0!";
+                ScoreAvailable = false;
+                return;
+            }
 
-			StatusText.text = "Disconnecting...";
-			PanelGroup.interactable = false;
+            StatusText.text = "";
+            ScoreAvailable = true;
+        }
 
-			// Remove shutdown listener since we are disconnecting deliberately
-			var events = _runnerInstance.GetComponent<NetworkEvents>();
-			events.OnShutdown.RemoveListener(OnShutdown);
+        //===========================================
+        //======Chuyển đổi panel=====================
+        public void SwitchPanel(int panel)
+        {
+            Color MilkWhite = new Color(254, 253, 245);
+            for (int i = 0; i < FuctionPanels.Length; i++)
+            {
+                FuctionPanels[i].SetActive(i == panel);
+                FuctionPanelChangeButtons[i].color = i == panel ? MilkWhite : Color.gray;
+            }
 
-			await _runnerInstance.Shutdown();
-			_runnerInstance = null;
+            PlayerPrefs.SetString("PlayerName", NicknameText.text);
+        }
 
-			// Reset of scene network objects is needed, reload the whole scene
-			SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
-		}
+        //===========================================
+        //======Cài đặt âm thanh=====================
+        public void SetMute(bool isMute)
+        {
+            SoundManager.Instance.SetMute(isMute);
+        }
 
-		private void OnShutdown(NetworkRunner runner, ShutdownReason reason)
-		{
-			// Unexpected shutdown happened (e.g. Host disconnected)
+        public void SetVolume()
+        {
+            SoundManager.Instance.SetFXVolume(_volumeSoundSlider.value);
+            SoundManager.Instance.SetMusicVolume(_volumeMusicSlider.value);
+        }
+        //===========================================
+        //===========================================
 
-			// Save status into static variable, it will be used in OnEnable after scene load
-			_shutdownStatus = $"Shutdown: {reason}";
-			Debug.LogWarning(_shutdownStatus);
+        public async void DisconnectClicked()
+        {
+            await Disconnect();
+        }
 
-			// Reset of scene network objects is needed, reload the whole scene
-			SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
-		}
-	}
+        public async void BackToMenu()
+        {
+            await Disconnect();
+
+            SceneManager.LoadScene(0);
+        }
+
+        public void TogglePanelVisibility()
+        {
+            if (PanelGroup.gameObject.activeSelf && _runnerInstance == null)
+                return; // Panel không thể ẩn nếu trò chơi không chạy
+
+            PanelGroup.gameObject.SetActive(!PanelGroup.gameObject.activeSelf);
+
+            if (!PanelGroup.gameObject.activeSelf)
+            {
+                Cursor.lockState = CursorLockMode.Locked;
+                Cursor.visible = false;
+            }
+
+            if (GameManager.Instance == null) return;
+            if (GameManager.Instance.State != GameState.Playing)
+                Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
+
+        private void OnEnable()
+        {
+            var nickname = PlayerPrefs.GetString("PlayerName");
+            if (string.IsNullOrEmpty(nickname))
+            {
+                nickname = "Player" + UnityEngine.Random.Range(10000, 100000);
+            }
+
+            NicknameText.text = nickname;
+            MaxScoreText.text = GameManager.ScoreToWin.ToString();
+
+            // Cố gắng tải trạng thái tắt máy trước đó
+            StatusText.text = _shutdownStatus != null ? _shutdownStatus : string.Empty;
+            _shutdownStatus = null;
+        }
+
+        private void Update()
+        {
+            // Phím Enter/Esc được sử dụng để khóa/mở khóa con trỏ trong chế độ xem trò chơi.
+            if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.Escape))
+            {
+                TogglePanelVisibility();
+            }
+
+            if (PanelGroup.gameObject.activeSelf)
+            {
+                foreach (var start in StartGroup)
+                {
+                    start.SetActive(_runnerInstance == null);
+                }
+
+                foreach (var disconnect in DisconnectGroup)
+                {
+                    disconnect.SetActive(_runnerInstance != null);
+                }
+
+                RoomText.interactable = _runnerInstance == null;
+                NicknameText.interactable = _runnerInstance == null;
+
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+            }
+        }
+
+        public async Task Disconnect()
+        {
+            if (_runnerInstance == null)
+                return;
+
+            StatusText.text = "Disconnecting...";
+            PanelGroup.interactable = false;
+
+            // Xóa listener tắt máy vì chúng ta đang ngắt kết nối có chủ đích
+            var events = _runnerInstance.GetComponent<NetworkEvents>();
+            events.OnShutdown.RemoveListener(OnShutdown);
+
+            await _runnerInstance.Shutdown();
+            _runnerInstance = null;
+            _jetFake.SetActive(true);
+            FuctionPanelChangeButtons[1].gameObject.SetActive(true);
+
+            // Cần đặt lại các đối tượng mạng của cảnh, tải lại toàn bộ cảnh
+            SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+        }
+
+        private void OnShutdown(NetworkRunner runner, ShutdownReason reason)
+        {
+            // Đã xảy ra tắt máy không mong muốn (ví dụ: Máy chủ ngắt kết nối)
+
+            // Lưu trạng thái vào biến tĩnh, nó sẽ được sử dụng trong OnEnable sau khi tải cảnh
+            _shutdownStatus = $"Shutdown: {reason}";
+            Debug.LogWarning(_shutdownStatus);
+
+            // Cần đặt lại các đối tượng mạng của cảnh, tải lại toàn bộ cảnh
+            SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+        }
+    }
 }
